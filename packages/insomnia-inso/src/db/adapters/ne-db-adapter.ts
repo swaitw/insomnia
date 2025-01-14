@@ -1,13 +1,16 @@
+import { stat } from 'node:fs/promises';
+
+import NeDB from '@seald-io/nedb';
 import path from 'path';
-import NeDB from 'nedb';
-import type { BaseModel } from '../models/types';
+
 import { Database, DbAdapter, emptyDb } from '../index';
-import fs from 'fs';
-import { UNKNOWN, UNKNOWN_OBJ } from '../../types';
+import type { BaseModel } from '../models/types';
 
 const neDbAdapter: DbAdapter = async (dir, filterTypes) => {
-  // Sanity check - do db files exist?
-  if (!fs.existsSync(path.join(dir, 'insomnia.Workspace.db'))) {
+  // Confirm if db files exist
+  try {
+    await stat(path.join(dir, 'insomnia.Workspace.db'));
+  } catch (err) {
     return null;
   }
 
@@ -21,12 +24,12 @@ const neDbAdapter: DbAdapter = async (dir, filterTypes) => {
         filename: filePath,
         corruptAlertThreshold: 0.9,
       });
-      collection.find({}, (err: UNKNOWN, docs: BaseModel[]) => {
+      collection.find({}, (err: Error, docs: BaseModel[]) => {
         if (err) {
           return reject(err);
         }
 
-        (db[t] as UNKNOWN_OBJ[]).push(...docs);
+        (db[t] as {}[]).push(...docs);
         resolve(null);
       });
     }),

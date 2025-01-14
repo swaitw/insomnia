@@ -1,41 +1,39 @@
-import Mocha, { Reporter, ReporterConstructor } from 'mocha';
 import chai from 'chai';
+import { unlink, writeFileSync } from 'fs';
+import fs from 'fs';
+import Mocha, { type Reporter, type ReporterConstructor } from 'mocha';
 import { tmpdir } from 'os';
-import { writeFileSync, unlink } from 'fs';
-import { sync } from 'mkdirp';
 import { join } from 'path';
+
+import type { TestResults } from './entities';
+import { Insomnia, type InsomniaOptions } from './insomnia';
 import { JavaScriptReporter } from './javascript-reporter';
-import Insomnia, { InsomniaOptions } from './insomnia';
 
-declare global {
-  namespace NodeJS {
-    interface Global {
-      insomnia?: Insomnia;
-      chai?: typeof chai;
-    }
-  }
-}
-
-const runInternal = async <T>(
+// declare var insomnia: Insomnia;
+const runInternal = async <TReturn, TNetworkResponse>(
   testSrc: string | string[],
-  options: InsomniaOptions,
+  options: InsomniaOptions<TNetworkResponse>,
   reporter: Reporter | ReporterConstructor = 'spec',
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- type not available, and postponing anyway until the impending move to all jest (and no mocha)
-  extractResult: (runner: { [key: string]: any }) => T,
-): Promise<T> => new Promise((resolve, reject) => {
+  extractResult: (runner: Mocha.Runner) => TReturn,
+) => new Promise<TReturn>((resolve, reject) => {
   const { bail, keepFile, testFilter } = options;
 
   // Add global `insomnia` helper.
   // This is the only way to add new globals to the Mocha environment as far as I can tell
+  // @ts-expect-error -- global hack
   global.insomnia = new Insomnia(options);
+
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  chai.use(require('chai-json-schema'));
+  // @ts-expect-error -- global hack
   global.chai = chai;
 
   const mocha: Mocha = new Mocha({
-    timeout: 5000,
+    //       ms   * sec * min
+    timeout: 1000 * 60  * 1,
     globals: ['insomnia', 'chai'],
     bail,
     reporter,
-    // @ts-expect-error https://github.com/DefinitelyTyped/DefinitelyTyped/pull/51770
     fgrep: testFilter,
   });
 
@@ -49,7 +47,9 @@ const runInternal = async <T>(
       resolve(extractResult(runner));
 
       // Remove global since we don't need it anymore
+      // @ts-expect-error -- global hack
       delete global.insomnia;
+      // @ts-expect-error -- global hack
       delete global.chai;
 
       if (keepFile && mocha.files.length) {
@@ -76,38 +76,40 @@ const runInternal = async <T>(
  */
 const writeTempFile = (sourceCode: string) => {
   const root = join(tmpdir(), 'insomnia-testing');
-  sync(root);
-  const path = join(root, `${Math.random()}-test.ts`);
+  fs.mkdirSync(root, { recursive: true });
+
+  const path = join(root, `${crypto.randomUUID()}-test.ts`);
   writeFileSync(path, sourceCode);
   return path;
 };
 
-type CliOptions = InsomniaOptions & {
-  reporter?: Reporter
-}
+type CliOptions<TNetworkResponse> = InsomniaOptions<TNetworkResponse> & {
+  reporter?: Reporter;
+};
 
 /**
  * Run a test file using Mocha
  */
-export const runTestsCli = async (
+export const runTestsCli = async <TNetworkResponse>(
   testSrc: string | string[],
-  { reporter, ...options }: CliOptions = {},
+  { reporter, ...options }: CliOptions<TNetworkResponse>,
 ) => runInternal(
   testSrc,
   options,
   reporter,
-  runner => !runner.stats.failures,
+  runner => !Boolean(runner.stats?.failures),
 );
 
 /**
  * Run a test file using Mocha and returns JS results
  */
-export const runTests = async <T>(
+export const runTests = async <TNetworkResponse>(
   testSrc: string | string[],
-  options: InsomniaOptions = {},
-) => runInternal<T>(
+  options: InsomniaOptions<TNetworkResponse>,
+) => runInternal(
   testSrc,
   options,
   JavaScriptReporter,
-  runner => runner.testResults,
+  // @ts-expect-error the `testResults` property is added onto the runner by the JavascriptReporter
+  runner => runner.testResults as TestResults,
 );
